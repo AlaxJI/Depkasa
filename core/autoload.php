@@ -4,13 +4,15 @@ defined( 'BASEPATH' ) OR exit( 'No direct script access allowed' );
 
 spl_autoload_register(
     function ( $class ) {
-    $class = str_replace( [ '\\' ], DIRECTORY_SEPARATOR, $class );
-    if ( file_exists( $class . '.php' ) )
+    $file = __DIR__ . DIRECTORY_SEPARATOR . str_replace( '\\', DIRECTORY_SEPARATOR, $class ) . ".php";
+    if ( file_exists( $file ) )
     {
-        require_once $class . '.php';
+        require_once($file);
     }
-    else
+
+    $file = str_replace( [ '\\' ], DIRECTORY_SEPARATOR, $class ) . '.php';
+    if ( file_exists( $file ) )
     {
-        die( "[[$class.php]]" );
+        require_once $file;
     }
 }, true, true );

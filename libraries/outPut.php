@@ -3,27 +3,37 @@
 namespace libraries;
 
 /**
- * Description of ajaxOutPut
+ * Description of outPut
  *
  * @author alaxji
  */
 class outPut
 {
 
-    public static $httpCodes    = [
+    /**
+     * @var array
+     */
+    public static $httpCodes = [
         400 => 'Bad Request',
         503 => 'Service Unavailable.',
         520 => 'Unknown Error'
     ];
+
+    /**
+     * @var boolean
+     */
     protected static $firstJSON = true;
 
-    public static function likeJSON( $array, $echo = true, $buffer_length = 4096, $flush = true )
+    /**
+     * @param mixed $value
+     * @param boolean $echo
+     * @param int $buffer_length
+     * @param boolean $flush
+     * @return mixed
+     */
+    public static function likeJSON( $value, $echo = true, $buffer_length = 4096, $flush = true )
     {
-        if ( !is_array( $array ) )
-        {
-            return false;
-        }
-        $stringJSON = json_encode( $array );
+        $stringJSON = json_encode( $value );
         if ( self::$firstJSON )
         {
             self::$firstJSON = false;
@@ -38,7 +48,7 @@ class outPut
             echo $outPut;
             if ( $flush )
             {
-                echo str_repeat( ' ', $buffer_length );
+                echo $buffer_length == 0 ? '' : str_repeat( ' ', $buffer_length );
                 @ob_flush();
                 flush();
             }
@@ -47,23 +57,36 @@ class outPut
         return $outPut;
     }
 
-    public static function likeAnswer( $array )
-    {
-
-    }
-
+    /**
+     * @param array $header =
+     *                  [
+     *                      'header'=>
+     *                          [
+     *                      'code' => code,
+     *                              'headers' => ['header1', 'header2',..., 'headerN'],
+     *                          ]
+     *                      'msg' => 'message'
+     *                  ]
+     */
     public static function likeError( $header )
     {
-        $code    = $header['header']['code'];
-        $desc    = self::$httpCodes[$code];
-        $headers = $header['header']['heares'];
-        header( "HTTP/1.1 $code $desc", TRUE, $code );
-        foreach ( $headers as $head )
+        if ( !isset( $header['header']['code'] ) )
         {
-            header( $head );
+            return false;
         }
-        echo $header['msg'];
-        die( $code );
+        $code    = $header['header']['code'];
+        $desc    = isset( self::$httpCodes[$code] ) ? self::$httpCodes[$code] : "";
+        $headers = isset( $header['header']['headers'] ) ? $header['header']['headers'] : [];
+        if ( !headers_sent() )
+        {
+            header( "HTTP/1.1 $code $desc", TRUE, $code );
+            foreach ( $headers as $head )
+            {
+                header( $head );
+            }
+        }
+        echo isset( $header['msg'] ) ? $header['msg'] : "";
+        return true;
     }
 
 }

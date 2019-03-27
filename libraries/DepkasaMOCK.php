@@ -139,13 +139,6 @@ class DepkasaMOCK
             return [ 'code' => 999, 'msg' => 'Платёж не инициализирован' ];
         }
 
-        self::$cURL   = curl_init();
-        curl_setopt( self::$cURL, CURLOPT_URL, self::$paymentURL );
-        curl_setopt( self::$cURL, CURLOPT_RETURNTRANSFER, true );
-        curl_setopt( self::$cURL, CURLOPT_POST, 1 );
-        curl_setopt( self::$cURL, CURLOPT_POSTFIELDS, self::$postdata );
-        curl_setopt( self::$cURL, CURLOPT_CONNECTTIMEOUT, 30 );
-        $this->answer = curl_exec( self::$cURL );
         try
         {
             self::updateTransaction( $this->referenceNo, [ 'status' => 'external' ] );
@@ -153,6 +146,7 @@ class DepkasaMOCK
         {
             throw new \Exception( $ex->getMessage(), $ex->getCode() );
         }
+
         return [ 'code' => 0, 'msg' => date( "Y-m-d H:i:s" ) . " - статус 'external'" ];
     }
 
@@ -162,6 +156,15 @@ class DepkasaMOCK
         {
             return [ 'code' => 999, 'msg' => 'Платёж не инициализирован' ];
         }
+
+        self::$cURL   = curl_init();
+        curl_setopt( self::$cURL, CURLOPT_URL, self::$paymentURL );
+        curl_setopt( self::$cURL, CURLOPT_RETURNTRANSFER, true );
+        curl_setopt( self::$cURL, CURLOPT_POST, 1 );
+        curl_setopt( self::$cURL, CURLOPT_POSTFIELDS, self::$postdata );
+        curl_setopt( self::$cURL, CURLOPT_CONNECTTIMEOUT, 30 );
+        $this->answer = curl_exec( self::$cURL );
+
         if ( curl_getinfo( self::$cURL, CURLINFO_HTTP_CODE ) == 500 )
         {
             $data = [

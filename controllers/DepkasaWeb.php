@@ -44,7 +44,7 @@ class DepkasaWeb
             $depkasa->callback();
         } catch ( \Exception $exc )
         {
-            $this->sendError( $exc->getCode(), \libraries\outPut::likeJSON( [ 'msg' => $exc->getMessage() ] ) );
+            $this->sendError( $exc->getCode(), \libraries\outPut::likeJSON( [ 'msg' => $exc->getMessage() ], false ) );
         }
     }
 
@@ -56,10 +56,12 @@ class DepkasaWeb
 
         try
         {
+            $return  = false;
             $depkasa = new \libraries\DepkasaMOCK( $this->config );
         } catch ( \Exception $exc )
         {
-            $this->sendError( $exc->getCode(), \libraries\outPut::likeJSON( [ 'msg' => $exc->getMessage() ] ) );
+            $this->sendError( $exc->getCode(), \libraries\outPut::likeJSON( [ 'msg' => $exc->getMessage() ], false ) );
+            return;
         }
         $callbackUrl = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['SERVER_NAME'] . $_SERVER['SCRIPT_NAME'] . '?action=callback';
         $returnUlr   = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['SERVER_NAME'] . $_SERVER['SCRIPT_NAME'];
@@ -68,6 +70,7 @@ class DepkasaWeb
         if ( $amount <= 0 )
         {
             $this->sendError( 400, \libraries\outPut::likeJSON( [ 'msg' => [ 'msg' => "Сумма платежа {$_POST['amount']} должна быть положительным числом " ] ], false ) );
+            return;
         }
         $amount      = (int) (round( $amount, 2 ) * 100);
         $timestamp   = time();
@@ -102,25 +105,42 @@ class DepkasaWeb
             // Инициализируем
             $result = $depkasa->payment_init( $postdata );
             \libraries\outPut::likeJSON( $result );
-            ($result['code'] == 0) || $this->sendError( 520, '' );
+            if ( $result['code'] != 0 )
+            {
+                $this->sendError( 520, '' );
+                return;
+            }
 
             // Отправляем
             $result = $depkasa->payment_external();
             \libraries\outPut::likeJSON( $result );
-            ($result['code'] == 0) || $this->sendError( 520, '' );
+            if ( $result['code'] != 0 )
+            {
+                $this->sendError( 520, '' );
+                return;
+            }
 
             // Обрабатываем
             $result = $depkasa->payment_delivered();
             \libraries\outPut::likeJSON( $result );
-            ($result['code'] == 0) || $this->sendError( 520, '' );
+            if ( $result['code'] != 0 )
+            {
+                $this->sendError( 520, '' );
+                return;
+            }
 
             // Завершаем
             $result = $depkasa->payment_deinit();
             \libraries\outPut::likeJSON( $result );
-            ($result['code'] == 0) || $this->sendError( 520, '' );
+            if ( $result['code'] != 0 )
+            {
+                $this->sendError( 520, '' );
+                return;
+            }
         } catch ( Exception $exc )
         {
-            $this->sendError( $exc->getCode(), \libraries\outPut::likeJSON( [ 'msg' => $exc->getMessage() ] ) );
+            $this->sendError( $exc->getCode(), \libraries\outPut::likeJSON( [ 'msg' => $exc->getMessage() ], false ) );
+            return;
         }
 
         // Ждём callback
@@ -128,7 +148,8 @@ class DepkasaWeb
         // Это нужно для того, если у платёжного агрегатора что-то случилось и ответ пришёл спустя какое-то время.
         if ( false === ($get_status = \libraries\DepkasaMOCK::$db->prepare( "SELECT id, status FROM transactions WHERE reference_no = '$referenceNo'" )) )
         {
-            $this->sendError( 503, \libraries\outPut::likeJSON( [ 'msg' => 'Ошибка подготовки запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ] ) );
+            $this->sendError( 503, \libraries\outPut::likeJSON( [ 'msg' => 'Ошибка подготовки запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ], false ) );
+            return;
         }
 
         $awaiting_callback = true;
@@ -137,7 +158,8 @@ class DepkasaWeb
         {
             if ( false === ($get_status->execute()) )
             {
-                $this->sendError( 503, \libraries\outPut::likeJSON( [ 'msg' => 'Ошибка запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ] ) );
+                $this->sendError( 503, \libraries\outPut::likeJSON( [ 'msg' => 'Ошибка запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ], false ) );
+                return;
             }
             $result = $get_status->fetch( PDO::FETCH_ASSOC );
 
@@ -165,13 +187,14 @@ class DepkasaWeb
         }
         if ( false === ($res = \libraries\DepkasaMOCK::$db->query( "SELECT id FROM transaction_statuses WHERE transaction_id = $transaction_id AND status = 'awaiting_callback'" )) )
         {
-            die( ',' . json_encode( [ 'code' => 2, 'msg' => 'Ошибка запроса транзакции в БД  :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ] ) );
+            $this->sendError( 503, \libraries\outPut::likeJSON( [ 'msg' => 'Ошибка запроса транзакции в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ], false ) );
+            return;
         }
         $res       = $res->fetch( PDO::FETCH_ASSOC );
         $status_id = $res['id'];
 
         $is_pending    = true;
-        $pending_count = 1;
+        $pending_count = 0;
         $select        = "
             SELECT
                 transaction_statuses.id
@@ -184,62 +207,49 @@ class DepkasaWeb
             ORDER BY transaction_statuses.id";
         if ( false === ($get_status    = \libraries\DepkasaMOCK::$db->prepare( $select )) )
         {
-            die( ',' . json_encode( [ 'code' => 2, 'msg' => 'Ошибка подготовки запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ] ) );
+            $this->sendError( 503, \libraries\outPut::likeJSON( [ 'msg' => 'Ошибка подготовки запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ], false ) );
+            return;
         }
         while ( $is_pending )
         {
             if ( false === ($get_status->execute( [ $status_id ] )) )
             {
-                echo ',' . json_encode( [ 'code' => 2, 'msg' => 'Ошибка запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ] );
-                die( ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] ) );
+                $this->sendError( 503, \libraries\outPut::likeJSON( [ 'msg' => 'Ошибка запроса в БД :: ' . implode( ' ', \libraries\DepkasaMOCK::$db->errorInfo() ) ], false ) );
+                return;
             }
-
             $res = $get_status->fetchAll();
             foreach ( $res as $value )
             {
+                if ( $pending_count != $value['pending_count'] )
+                {
+                    for ( $i = $pending_count + 1; $i <= $value['pending_count']; $i++ )
+                    {
+                        \libraries\outPut::likeJSON( [ 'code' => 0, 'msg' => date( "Y-m-d H:i:s" ) . " - запрос статуса $i" ] );
+                    }
+                    $pending_count = $value['pending_count'];
+                    if ( $pending_count == 10 )
+                    {
+                        \libraries\outPut::likeJSON( [ 'code' => 0, 'msg' => date( "Y-m-d H:i:s" ) . " - 10 запросов." ] );
+                        return;
+                    }
+                }
                 if ( $value['status'] == 'success' || $value['status'] == 'decline' )
                 {
-                    echo ',' . json_encode( [ 'code' => 0, 'msg' => "{$value['ts_created']} - статус {$value['status']}" ] );
-                    echo ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] );
-                    exit();
+                    \libraries\outPut::likeJSON( [ 'code' => 0, 'msg' => "{$value['ts_created']} - статус {$value['status']}" ] );
+                    return;
                 }
                 elseif ( !empty( $value['status'] ) )
                 {
                     $status_id = $value['id'];
-                    echo ',' . json_encode( [ 'code' => 0, 'msg' => "{$value['ts_created']} - статус {$value['status']}" ] );
-                    echo ',' . json_encode( [ 'code' => 0, 'msg' => date( "Y-m-d H:i:s" ) . " - запрос статуса" ] );
-                    echo str_repeat( ' ', 4096 );
-                    @ob_flush();
-                    flush();
-                }
-                elseif ( $pending_count != $value['pending_count'] )
-                {
-                    $pending_count = $value['pending_count'];
-                    echo ',' . json_encode( [ 'code' => 0, 'msg' => date( "Y-m-d H:i:s" ) . " - запрос статуса" ] );
-                    echo str_repeat( ' ', 4096 );
-                    if ( $pending_count == 10 )
-                    {
-                        echo ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] );
-                        exit();
-                    }
-                    @ob_flush();
-                    flush();
+                    \libraries\outPut::likeJSON( [ 'code' => 0, 'msg' => "{$value['ts_created']} - статус {$value['status']}" ] );
                 }
                 else
                 {
-                    echo ',' . json_encode( [ 'code' => 0, 'msg' => "" ] );
-                    echo str_repeat( ' ', 4096 );
-                    @ob_flush();
-                    flush();
+                    \libraries\outPut::likeJSON( [ 'msg' => "" ] );
                 }
                 sleep( 1 );
             }
         }
-
-
-        //echo ',' . json_encode( [ 'code' => 0, 'msg' => "$status_id" ] );
-        //@ob_flush();
-        //flush();
     }
 
     protected function sendError( $code, $msg )
@@ -247,8 +257,8 @@ class DepkasaWeb
         \libraries\outPut::likeError(
             [
                 'header' => [
-                    'code'   => $code,
-                    'heares' => [
+                    'code'    => $code,
+                    'headers' => [
                         "Content-Type: text/html;charset=utf-8",
                     ]
                 ],
