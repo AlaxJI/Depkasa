@@ -17,27 +17,47 @@ defined( 'BASEPATH' ) OR exit( 'No direct script access allowed' );
 class DepkasaMOCK
 {
 
-    private static $apiKey           = 'daef4ff758859227ac5ff22b3d73e090';
-    private static $secretKey        = 'f07fce0a';
+    private static $apiKey;
+    private static $secretKey;
     private static $paymentURL       = 'https://mock01.ecpdss.net/depkasa/a/payment/welcome';
     private static $paymentDetailURL = 'https://mock01.ecpdss.net/depkasa/a/payment/detail';
-    private static $callbackStatuses = [
-        'APPROVED' => [ 'success', 'Покупка успешно завершена' ],
-        'DECLINED' => [ 'decline', 'Покупка отклонена по причинам от эквайера' ],
-        'CANCELED' => [ 'decline', 'Транзакция отменена пользователем' ],
-        'PENDING'  => [ '', '' ],
-        'ERROR'    => [ 'decline', 'Ошибка в ПС' ],
-    ];
+    private static $postdata;
+    private static $cURL;
     public static $db;
+    private static $callbackStatuses = [
+        'APPROVED' => [ 'success', 'Покупка успешно завершена', 1 ],
+        'DECLINED' => [ 'decline', 'Покупка отклонена по причинам от эквайера', 1 ],
+        'CANCELED' => [ 'decline', 'Транзакция отменена пользователем', 1 ],
+        'PENDING'  => [ '', '', 0 ],
+        'ERROR'    => [ 'decline', 'Ошибка в ПС', 1 ],
+        'WAITING'  => [ 'awaiting_callback', '', 0 ],
+    ];
+    private $answer;
+    private $referenceNo;
 
     public function __construct( $config = [] )
     {
-        if ( !isset( $config['database'] ) || !is_array( $config['database'] ) )
+        if ( !isset( $config['apiKey'] ) )
         {
-            header( 'HTTP/1.1 503 Service Unavailable.', TRUE, 503 );
-            header( "Content-Type: text/html;charset=utf-8" );
-            echo 'Задайте параметры БД<br/>';
-            die(); // EXIT_CONFIG;
+            throw new \Exception( 'Нет ключа API', 503 );
+        }
+        else
+        {
+            self::$apiKey = $config['apiKey'];
+        }
+
+        if ( !isset( $config['secretKey'] ) )
+        {
+            throw new \Exception( 'Нет секретного ключа', 503 );
+        }
+        else
+        {
+            self::$secretKey = $config['secretKey'];
+        }
+
+        if ( !isset( $config['database'] ) || !is_array( $config['database'] ) || empty( $config['database'] ) )
+        {
+            throw new \Exception( 'Задайте параметры БД', 503 );
         }
         $database = $config['database'];
         $dbs      = $database['drv'] . ':host=' . $database['host'] . ';dbname=' . $database['dbname'] . ';charset=utf8;';
@@ -46,10 +66,7 @@ class DepkasaMOCK
             self::$db = new \PDO( $dbs, $database['user'], $database['pass'], [ PDO::ATTR_PERSISTENT => true, PDO::ERRMODE_SILENT => true ] );
         } catch ( \Exception $ex )
         {
-            header( 'HTTP/1.1 503 Service Unavailable.', TRUE, 503 );
-            header( "Content-Type: text/html;charset=utf-8" );
-            echo 'Нет доступа к базе данных<br/>';
-            exit( 3 ); // EXIT_CONFIG;
+            throw new \Exception( 'Нет доступа к базе данных', 503 );
         }
     }
 
@@ -64,14 +81,13 @@ class DepkasaMOCK
     public static function generateToken( $amount, $currency = false, $referenceNo = false, $timestamp = false )
     {
 
-        $params = [
+        $params  = [
             'apiKey'      => self::$apiKey,
             'amount'      => $amount,
             'currency'    => ($currency === false) ? 'EUR' : $currency,
             'referenceNo' => ($referenceNo === false) ? uniqid( 'reference_' ) : $referenceNo,
             'timestamp'   => ($timestamp === false) ? time() : $timestamp,
         ];
-
         $rawHash = self::$secretKey . implode( '', $params );
         return md5( $rawHash );
     }
@@ -89,146 +105,127 @@ class DepkasaMOCK
         return ($request['token'] == md5( $rawHash ));
     }
 
-    /**
-     * token
-     * apiKey
-     * email
-     * birthday
-     * amount
-     * currency
-     * returnUrl
-     * referenceNo
-     * timestamp
-     * language
-     * billingFirstName
-     * billingLastName
-     * billingAddress1
-     * billingCity
-     * billingPostcode
-     * billingCountry
-     * paymentMethod
-     * number
-     * cvv
-     * expiryMonth
-     * expiryYear
-     * callbackUrl
-     *
-     */
-    public function payment()
+    public function payment_init( $postdata )
     {
-        $callbackUrl = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['SERVER_NAME'] . $_SERVER['SCRIPT_NAME'] . '?action=callback';
-        $returnUlr   = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['SERVER_NAME'] . $_SERVER['SCRIPT_NAME'];
+        $amount            = $postdata['amount'];
+        $ts_created        = date( 'Y-m-d H:i:s', $postdata['timestamp'] );
+        $timestamp         = $postdata['timestamp'];
+        $referenceNo       = $postdata['referenceNo'];
+        $this->referenceNo = $referenceNo;
 
-        $amount = filter_input( INPUT_POST, 'amount', FILTER_VALIDATE_FLOAT );
+        $postdata = array_merge(
+            [
+                'token'  => self::generateToken( $amount, 'EUR', $referenceNo, $timestamp ),
+                'apiKey' => self::$apiKey, ],
+            $postdata
+        );
 
-        if ( $amount <= 0 )
-        {
-            die( json_encode( [ 'code' => 1, 'msg' => "Сумма платежа {$_POST['amount']} должна быть положительна " ] ) );
-        }
-        $amount      = (int) (round( $amount, 2 ) * 100);
-        $timestamp   = time();
-        $ts_created  = date( 'Y-m-d H:i:s', $timestamp );
-        $referenceNo = md5( microtime() );
-        $insert      = "INSERT INTO transactions (reference_no, amount, currency, ts_created) VALUES('$referenceNo', $amount, 'EUR', '$ts_created' )";
+
+        self::$postdata = $postdata;
+
+        $insert = "INSERT INTO transactions (reference_no, amount, currency, ts_created) VALUES('$referenceNo', $amount, 'EUR', '$ts_created' )";
         if ( false === self::$db->query( $insert ) )
         {
-            echo json_encode( [ 'code' => 1, 'msg' => 'Ошибка записи транзакции в БД :: ' . implode( ' ', self::$db->errorInfo() ) ] );
-            die( ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] ) );
+            throw new \Exception( 'Ошибка записи транзакции в БД :: ' . implode( ' ', self::$db->errorInfo() ), 503 );
         }
 
-        echo json_encode( [ 'code' => 0, 'msg' => "$ts_created - статус 'init'" ] );
-//echo "$ts_created - статус 'init'";
-        @ob_flush();
-        flush();
-        ob_clean();
+        return [ 'code' => 0, 'msg' => "$ts_created - статус 'init'" ];
+    }
 
-        $postdata = [
-            'token'            => self::generateToken( $amount, 'EUR', $referenceNo, $timestamp ),
-            'apiKey'           => self::$apiKey,
-            'email'            => 'ek4all@mail.ru',
-            'birthday'         => '1970-01-01',
-            'amount'           => $amount,
-            'currency'         => 'EUR',
-            'returnUrl'        => $returnUlr,
-            'referenceNo'      => $referenceNo,
-            'timestamp'        => $timestamp,
-            'language'         => 'en',
-            'billingFirstName' => 'A',
-            'billingLastName'  => 'D',
-            'billingAddress1'  => 'A',
-            'billingCity'      => 'C',
-            'billingPostcode'  => 'P',
-            'billingCountry'   => 'C',
-            'paymentMethod'    => 'GIFTCARD',
-            'number'           => '4012888888881881',
-            'cvv'              => '123',
-            'expiryMonth'      => '2',
-            'expiryYear'       => '2',
-            'callbackUrl'      => $callbackUrl,
-        ];
-        //die( print_r( $postdata, true ) );
-        $opts     = [ 'http' =>
-            [
-                'method'  => 'POST',
-                'header'  => 'Content-type: application/x-www-form-urlencoded',
-                'content' => http_build_query( $postdata )
-            ],
-        ];
-        sleep( 1 );
+    public function payment_external()
+    {
+        if ( empty( $this->referenceNo ) )
+        {
+            return [ 'code' => 999, 'msg' => 'Платёж не инициализирован' ];
+        }
 
-        self::setStatus( $referenceNo, 'external' );
+        self::$cURL   = curl_init();
+        curl_setopt( self::$cURL, CURLOPT_URL, self::$paymentURL );
+        curl_setopt( self::$cURL, CURLOPT_RETURNTRANSFER, true );
+        curl_setopt( self::$cURL, CURLOPT_POST, 1 );
+        curl_setopt( self::$cURL, CURLOPT_POSTFIELDS, self::$postdata );
+        curl_setopt( self::$cURL, CURLOPT_CONNECTTIMEOUT, 30 );
+        $this->answer = curl_exec( self::$cURL );
+        try
+        {
+            self::updateTransaction( $this->referenceNo, [ 'status' => 'external' ] );
+        } catch ( \Exception $ex )
+        {
+            throw new \Exception( $ex->getMessage(), $ex->getCode() );
+        }
+        return [ 'code' => 0, 'msg' => date( "Y-m-d H:i:s" ) . " - статус 'external'" ];
+    }
 
-        $ch     = curl_init();
-        curl_setopt( $ch, CURLOPT_URL, self::$paymentURL );
-        curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-        curl_setopt( $ch, CURLOPT_POST, 1 );
-        curl_setopt( $ch, CURLOPT_POSTFIELDS, $postdata );
-        curl_setopt( $ch, CURLOPT_CONNECTTIMEOUT, 30 );
-        $answer = curl_exec( $ch );
-        if ( curl_getinfo( $ch, CURLINFO_HTTP_CODE ) == 500 )
+    public function payment_delivered()
+    {
+        if ( empty( $this->referenceNo ) )
+        {
+            return [ 'code' => 999, 'msg' => 'Платёж не инициализирован' ];
+        }
+        if ( curl_getinfo( self::$cURL, CURLINFO_HTTP_CODE ) == 500 )
         {
             $data = [
                 'status'  => 'decline',
-                'comment' => '500 Внутренняя ошибка сервера'
+                'comment' => '500 Внутренняя ошибка сервера платёжного аргегатора'
             ];
-            self::updateTransaction( $referenceNo, $data );
-            echo ',' . json_encode( [ 'code' => 0, 'msg' => "Платёж не удался. Внутренняя ошибка сервера" ] );
-            die( ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] ) );
+            try
+            {
+                self::updateTransaction( $this->referenceNo, $data );
+            } catch ( \Exception $ex )
+            {
+                throw new \Exception( $ex->getMessage(), $ex->getCode() );
+            }
+            return [ 'code' => 998, 'msg' => "Платёж не удался. Внутренняя ошибка сервера платёжного аргегатора" ];
         }
-        curl_close( $ch );
+        curl_close( self::$cURL );
+        try
+        {
+            self::updateTransaction( $this->referenceNo, [ 'status' => 'delivered' ] );
+        } catch ( \Exception $ex )
+        {
+            throw new \Exception( $ex->getMessage(), $ex->getCode() );
+        }
+        return [ 'code' => 0, 'msg' => date( "Y-m-d H:i:s" ) . " - статус 'delivered'" ];
+    }
 
-        self::setStatus( $referenceNo, 'delivered' );
-        sleep( 1 );
+    public function payment_deinit()
+    {
+        if ( empty( $this->referenceNo ) )
+        {
+            return [ 'code' => 999, 'msg' => 'Платёж не инициализирован' ];
+        }
 
-        $answer = json_decode( $answer, true );
-        if ( $answer['status'] == 'DECLINED' )
+        $answer = json_decode( $this->answer, true );
+        $status = $answer['status'];
+        if ( key_exists( $status, self::$callbackStatuses ) )
         {
             $data = [
-                'status'  => 'decline',
-                'comment' => print_r( $answer, true )
+                'status'  => self::$callbackStatuses[$answer['status']][0],
+                'comment' => self::$callbackStatuses[$answer['status']][1],
             ];
-            self::updateTransaction( $referenceNo, $data );
-            echo ',' . json_encode( [ 'code' => 0, 'msg' => 'Платёж отклонён :: ' . print_r( $answer, true ) ] );
-            die( ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] ) );
-        }
-        elseif ( $answer['status'] == 'WAITING' )
-        {
-            $data = [
-                'status'              => 'awaiting_callback',
-                'transaction_foreign' => "{$answer['transactionId']}",
-            ];
-            self::updateTransaction( $referenceNo, $data );
+            try
+            {
+                self::updateTransaction( $this->referenceNo, $data );
+            } catch ( Exception $ex )
+            {
+                throw new \Exception( $ex->getMessage(), $ex->getCode() );
+            }
+            return [ 'code' => self::$callbackStatuses[$answer['status']][2], 'msg' => date( "Y-m-d H:i:s" ) . " - статус '" . self::$callbackStatuses[$answer['status']][0] . "'" ];
         }
         else
         {
             $data = [
                 'comment' => 'Неизвестный статус' . print_r( $answer, true )
             ];
-            self::updateTransaction( $referenceNo, $data );
-            echo ',' . json_encode( [ 'code' => 0, 'msg' => "Неизвестный статус" . print_r( $answer, true ) ] );
-            die( ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] ) );
+            try
+            {
+                self::updateTransaction( $this->referenceNo, $data );
+            } catch ( Exception $ex )
+            {
+                throw new \Exception( $ex->getMessage(), $ex->getCode() );
+            }
+            return [ 'code' => 997, 'msg' => "Неизвестный статус" . print_r( $answer, true ) ];
         }
-        return $referenceNo;
     }
 
     public function callback()
@@ -237,14 +234,17 @@ class DepkasaMOCK
         // Если на сервере что-то случилось и ответ пришёл спустя  какое-то время.....
         //
         $referenceNo = $_REQUEST['referenceNo'];
-        self::setStatus( $referenceNo, 'received', false );
+        try
+        {
+            self::updateTransaction( $referenceNo, [ 'status' => 'received' ] );
+        } catch ( \Exception $ex )
+        {
+            throw new \Exception( $ex->getMessage(), $ex->getCode() );
+        }
 
         if ( !self::checkToken( $_REQUEST ) )
         {
-            header( 'HTTP/1.1 409 Conflict.', TRUE, 409 );
-            header( "Content-Type: text/html;charset=utf-8" );
-            echo 'Токен не действительный';
-            die();
+            throw new \Exception( 'Токен не действительный', 409 );
         }
         sleep( 1 );
         if ( $_REQUEST['status'] != 'PENDING' )
@@ -255,8 +255,13 @@ class DepkasaMOCK
                     'status'  => self::$callbackStatuses[$_REQUEST['status']][0],
                     'comment' => self::$callbackStatuses[$_REQUEST['status']][1],
                 ];
-                self::updateTransaction( $referenceNo, $data, false );
-                exit();
+                try
+                {
+                    self::updateTransaction( $referenceNo, $data );
+                } catch ( \Exception $ex )
+                {
+                    throw new \Exception( $ex->getMessage(), $ex->getCode() );
+                }
             }
             else
             {
@@ -264,8 +269,13 @@ class DepkasaMOCK
                     'status'  => 'decline',
                     'comment' => "Неизвесный статус {$_REQUEST['status']}",
                 ];
-                self::updateTransaction( $referenceNo, $data, false );
-                exit();
+                try
+                {
+                    self::updateTransaction( $referenceNo, $data );
+                } catch ( \Exception $ex )
+                {
+                    throw new \Exception( $ex->getMessage(), $ex->getCode() );
+                }
             }
         }
 
@@ -273,7 +283,6 @@ class DepkasaMOCK
             'apiKey'      => self::$apiKey,
             'referenceNo' => $referenceNo,
         ];
-        //die( print_r( $postdata, true ) );
         $opts          = [ 'http' =>
             [
                 'method'  => 'POST',
@@ -301,9 +310,16 @@ class DepkasaMOCK
                     'status'  => 'decline',
                     'comment' => '500 Внутренняя ошибка сервера'
                 ];
-                self::updateTransaction( $referenceNo, $data );
-                echo ',' . json_encode( [ 'code' => 0, 'msg' => "Платёж не удался. Внутренняя ошибка сервера" ] );
-                die( ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] ) );
+                try
+                {
+                    self::updateTransaction( $referenceNo, $data );
+                } catch ( \Exception $ex )
+                {
+                    curl_close( $ch );
+                    throw new \Exception( $ex->getMessage(), $ex->getCode() );
+                }
+                curl_close( $ch );
+                return [ 'code' => 996, 'msg' => "Платёж не удался. Внутренняя ошибка сервера" ];
             }
             $answer = json_decode( $answer, true );
             error_log( print_r( $answer, true ) );
@@ -315,9 +331,16 @@ class DepkasaMOCK
                         'status'  => self::$callbackStatuses[$answer['status']][0],
                         'comment' => self::$callbackStatuses[$answer['status']][1],
                     ];
-                    self::updateTransaction( $referenceNo, $data, false );
+                    try
+                    {
+                        self::updateTransaction( $referenceNo, $data );
+                    } catch ( \Exception $ex )
+                    {
+                        curl_close( $ch );
+                        throw new \Exception( $ex->getMessage(), $ex->getCode() );
+                    }
                     curl_close( $ch );
-                    exit();
+                    return;
                 }
                 else
                 {
@@ -325,9 +348,9 @@ class DepkasaMOCK
                         'status'  => 'decline',
                         'comment' => "Неизвесный статус {$answer['status']}",
                     ];
-                    self::updateTransaction( $referenceNo, $data, false );
+                    self::updateTransaction( $referenceNo, $data );
                     curl_close( $ch );
-                    exit();
+                    return;
                 }
             }
             if ( $pending_count >= 10 )
@@ -336,25 +359,26 @@ class DepkasaMOCK
                     'status'  => 'decline',
                     'comment' => "Кол-во опросов статуса 10-и.",
                 ];
-                self::updateTransaction( $referenceNo, [ 'status' => "decline", 'comment' => "'Кол-во опросов статуса 10-и.'" ], false );
+                try
+                {
+                    self::updateTransaction( $referenceNo, $data );
+                } catch ( \Exception $ex )
+                {
+                    curl_close( $ch );
+                    throw new \Exception( $ex->getMessage(), $ex->getCode() );
+                }
                 curl_close( $ch );
-                exit();
+                return;
             }
             else
             {
                 sleep( 5 );
             }
         }
-
         curl_close( $ch );
     }
 
-    public static function setStatus( $referenceNo, $status, $with_output = true )
-    {
-        self::updateTransaction( $referenceNo, [ 'status' => $status ], $with_output );
-    }
-
-    public static function updateTransaction( $referenceNo, $fields = [], $with_output = true )
+    public static function updateTransaction( $referenceNo, $fields = [] )
     {
         if ( empty( $fields ) )
         {
@@ -384,26 +408,9 @@ class DepkasaMOCK
         $update    = "UPDATE transactions SET $set WHERE reference_no='$referenceNo'";
         if ( false === self::$db->query( $update ) )
         {
-            if ( $with_output )
-            {
-                echo ',' . json_encode( [ 'code' => 2, 'msg' => 'Ошибка обновления транзакции в БД :: ' . $update . ' :: ' . implode( ' ', self::$db->errorInfo() ) ] );
-                die( ',' . json_encode( [ 'code' => 0, 'msg' => "Операция завершена" ] ) );
-            }
-            else
-            {
-                header( 'HTTP/1.1 503 Service Unavailable.', TRUE, 503 );
-                header( "Content-Type: text/html;charset=utf-8" );
-                echo 'Ошибка обновления транзакции в БД :: ' . implode( ' ', self::$db->errorInfo() );
-                die();
-            }
+            throw new \Exception( 'Ошибка обновления транзакции в БД :: ' . implode( ' ', self::$db->errorInfo() ), 503 );
         }
-        if ( $with_output )
-        {
-            echo ',' . json_encode( [ 'code' => 0, 'msg' => "$ts_modify - статус {$fields['status']}" ] );
-            echo str_repeat( ' ', 4096 );
-            @ob_flush();
-            flush();
-        }
+        return true;
     }
 
 }
