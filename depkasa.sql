@@ -5,19 +5,6 @@ DROP DATABASE IF EXISTS `depkasa`;
 CREATE DATABASE `depkasa` /*!40100 DEFAULT CHARACTER SET utf8 */;
 USE `depkasa`;
 
-
-DROP TABLE IF EXISTS `transaction_statuses`;
-CREATE TABLE `transaction_statuses` (
-  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-  `transaction_id` bigint(20) unsigned NOT NULL,
-  `status` varchar(100) NOT NULL,
-  `ts_created` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `transaction_statuses_transaction_id_IDX` (`transaction_id`,`ts_created`) USING BTREE,
-  CONSTRAINT `transaction_statuses_transactions_FK` FOREIGN KEY (`transaction_id`) REFERENCES `transactions` (`id`) ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-
 DROP TABLE IF EXISTS `transactions`;
 CREATE TABLE `transactions` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -49,3 +36,14 @@ BEGIN
 END;;
 
 DELIMITER ;
+
+DROP TABLE IF EXISTS `transaction_statuses`;
+CREATE TABLE `transaction_statuses` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `transaction_id` bigint(20) unsigned NOT NULL,
+  `status` varchar(100) NOT NULL,
+  `ts_created` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `transaction_statuses_transaction_id_IDX` (`transaction_id`,`ts_created`) USING BTREE,
+  CONSTRAINT `transaction_statuses_transactions_FK` FOREIGN KEY (`transaction_id`) REFERENCES `transactions` (`id`) ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
