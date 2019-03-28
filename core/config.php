@@ -9,9 +9,9 @@ $config = [
     'paymentDetailURL' => 'https://mock01.ecpdss.net/depkasa/a/payment/detail',
     'database'         => [
         'drv'    => 'mysql',
-        'host'   => '127.0.0.1',
+        'host'   => '',
         'dbname' => 'depkasa',
-        'user'   => 'root',
-        'pass'   => 'DMUdmuDai2'
+        'user'   => '',
+        'pass'   => ''
     ],
 ];
